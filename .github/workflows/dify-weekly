@@ -1,0 +1,90 @@
+name: Weekly Dify Workflow Call
+
+on:
+  schedule:
+    # 每周一凌晨2点运行 (UTC时间)
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+jobs:
+  call-dify-workflow:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检查必要的密钥
+      run: |
+        if [ -z "${{ secrets.DIFY_BASE_URL }}" ]; then
+          echo "错误: DIFY_BASE_URL 密钥未设置"
+          exit 1
+        fi
+        if [ -z "${{ secrets.DIFY_TOKENS }}" ]; then
+          echo "错误: DIFY_TOKENS 密钥未设置"
+          exit 1
+        fi
+        echo "所有必要的密钥已配置"
+
+    - name: 调用Dify工作流
+      id: call-dify
+      env:
+        DIFY_BASE_URL: ${{ secrets.DIFY_BASE_URL }}
+        DIFY_TOKENS: ${{ secrets.DIFY_TOKENS }}
+        DIFY_INPUTS: ${{ secrets.DIFY_INPUTS }}
+      run: |
+        set -e
+        
+        # 准备请求数据
+        if [ -n "$DIFY_INPUTS" ]; then
+          # 验证DIFY_INPUTS是否是有效的JSON
+          if echo "$DIFY_INPUTS" | jq . >/dev/null 2>&1; then
+            REQUEST_BODY="{\"inputs\": $DIFY_INPUTS}"
+            echo "使用自定义输入参数"
+          else
+            echo "DIFY_INPUTS 不是有效的JSON，使用空对象"
+            REQUEST_BODY="{\"inputs\": {}}"
+          fi
+        else
+          REQUEST_BODY="{\"inputs\": {}}"
+          echo "使用默认空输入参数"
+        fi
+
+        echo "开始调用Dify工作流..."
+        
+        # 调用Dify API
+        response=$(curl -s -w "\n%{http_code}" -X POST "$DIFY_BASE_URL" \
+          -H "Authorization: Bearer $DIFY_TOKENS" \
+          -H "Content-Type: application/json" \
+          -H "User-Agent: GitHub-Actions-Weekly-Workflow/1.0" \
+          -d "$REQUEST_BODY" \
+          --connect-timeout 30 \
+          --max-time 60)
+        
+        http_code=$(echo "$response" | tail -n1)
+        response_body=$(echo "$response" | head -n1)
+        
+        echo "================================"
+        echo "HTTP状态码: $http_code"
+        echo "响应内容: $response_body"
+        echo "================================"
+        
+        # 保存响应到输出变量
+        echo "response_body=$response_body" >> $GITHUB_OUTPUT
+        
+        if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 201 ]; then
+          echo "Dify工作流调用成功"
+        else
+          echo "Dify工作流调用失败，HTTP状态码: $http_code"
+          exit 1
+        fi
+
+    - name: 处理响应数据
+      if: steps.call-dify.outputs.response_body
+      run: |
+        echo "工作流执行响应:"
+        echo '${{ steps.call-dify.outputs.response_body }}' | jq '.' 2>/dev/null || echo '${{ steps.call-dify.outputs.response_body }}'
+
+    - name: 任务总结
+      if: always()
+      run: |
+        echo "=== 每周Dify工作流调用任务完成 ==="
+        echo "时间: $(date)"
+        echo "结果: ${{ job.status }}"
